@@ -78,8 +78,8 @@ function VideoRoom({ user }) {
           setPeers(peers);
         });
 
-        socketRef.current.on('user-connected', payload => {
-          const peer = addPeer(payload.signal, payload.socketId, stream);
+        socketRef.current.on('user-connected', ({ userId, userName, socketId }) => {
+          const peer = createPeer(socketId, socketRef.current.id, stream);
           peersRef.current.push({
             peerID: payload.socketId,
             peer,
@@ -136,6 +136,13 @@ function VideoRoom({ user }) {
       initiator: true,
       trickle: false,
       stream,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ]
+      }
     });
 
     peer.on('signal', signal => {
@@ -154,6 +161,13 @@ function VideoRoom({ user }) {
       initiator: false,
       trickle: false,
       stream,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ]
+      }
     });
 
     peer.on('signal', signal => {
