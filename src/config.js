@@ -3,8 +3,8 @@ const isDevelopment = window.location.hostname === 'localhost';
 
 export const API_URL = isDevelopment
   ? 'http://localhost:5000/api'
-  : 'https://collabspace.up.railway.app/api';  // ← YOUR Railway URL
+  : 'https://video-conference-backend-gqh8.onrender.com/api';  // ← Your Render URL
 
 export const SOCKET_URL = isDevelopment
   ? 'http://localhost:5000'
-  : 'https://collabspace.up.railway.app';  // ← YOUR Railway URL
+  : 'https://video-conference-backend-gqh8.onrender.com/';  // ← Your Render URL
