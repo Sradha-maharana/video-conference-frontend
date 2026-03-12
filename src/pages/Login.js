@@ -34,7 +34,14 @@ function Login({ onLogin }) {
       });
 
       onLogin(response.data.user, response.data.token);
-      navigate('/dashboard');
+      // ✅ If user came from a room link, redirect back there after login
+      const redirectTo = sessionStorage.getItem('redirectAfterLogin');
+      if (redirectTo) {
+        sessionStorage.removeItem('redirectAfterLogin');
+        navigate(redirectTo);
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');
     } finally {
@@ -63,7 +70,7 @@ function Login({ onLogin }) {
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <VideocamIcon sx={{ fontSize: 60, color: 'primary.main', mb: 2 }} />
             <Typography variant="h4" component="h1" gutterBottom>
-              SecureConf
+              Collab Space
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Sign in to start your video conference

@@ -66,21 +66,15 @@ function Register({ onRegister }) {
           justifyContent: 'center'
         }}
       >
-        <Paper
-          elevation={3}
-          sx={{
-            p: 4,
-            width: '100%',
-            borderRadius: 2
-          }}
-        >
+        <Paper elevation={3} sx={{ p: 4, width: '100%', borderRadius: 2 }}>
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <VideocamIcon sx={{ fontSize: 60, color: 'primary.main', mb: 2 }} />
             <Typography variant="h4" component="h1" gutterBottom>
               Create Account
             </Typography>
+            {/* ✅ Fixed: was "Join SecureConf today" */}
             <Typography variant="body2" color="text.secondary">
-              Join SecureConf today
+              Join Collab Space today
             </Typography>
           </Box>
 

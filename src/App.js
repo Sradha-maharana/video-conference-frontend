@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import axios from 'axios';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Login from './pages/Login';
@@ -29,10 +30,23 @@ function App() {
   useEffect(() => {
     const token = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
-
     if (token && userData) {
       setUser(JSON.parse(userData));
     }
+  }, []);
+
+  // ✅ Auto-logout on 401 — handles expired/invalid tokens globally
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      response => response,
+      error => {
+        if (error.response?.status === 401) {
+          handleLogout();
+        }
+        return Promise.reject(error);
+      }
+    );
+    return () => axios.interceptors.response.eject(interceptor);
   }, []);
 
   const handleLogin = (userData, token) => {
@@ -66,13 +80,22 @@ function App() {
           />
           <Route
             path="/room/:roomId"
-            element={user ? <VideoRoom user={user} /> : <Navigate to="/login" />}
+            element={user ? <VideoRoom user={user} /> : <SaveAndRedirect />}
           />
           <Route path="/" element={<Navigate to="/dashboard" />} />
         </Routes>
       </Router>
     </ThemeProvider>
   );
+}
+
+// ✅ Saves intended room URL so user is redirected back after login
+function SaveAndRedirect() {
+  const location = useLocation();
+  React.useEffect(() => {
+    sessionStorage.setItem('redirectAfterLogin', location.pathname);
+  }, [location]);
+  return <Navigate to="/login" />;
 }
 
 export default App;
