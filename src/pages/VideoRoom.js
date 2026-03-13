@@ -50,8 +50,8 @@ function VideoRoom({ user }) {
   const [copied, setCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [roomStatus, setRoomStatus] = useState('connecting'); // connecting | waiting | approved | denied
-  const [admissionRequests, setAdmissionRequests] = useState([]); // [{ socketId, userName }]
+  const [roomStatus, setRoomStatus] = useState('connecting');
+  const [admissionRequests, setAdmissionRequests] = useState([]);
 
   const socketRef = useRef();
   const userVideo = useRef();
@@ -65,8 +65,6 @@ function VideoRoom({ user }) {
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
         userStreamRef.current = stream;
-        // ✅ Don't attach to DOM here — userVideo may not be mounted yet (waiting screen)
-        // Attachment is handled by a separate useEffect below
 
         socketRef.current.emit('join-room', {
           roomId,
@@ -74,65 +72,67 @@ function VideoRoom({ user }) {
           userName: user.name
         });
 
-        // Approved to join (host gets this immediately, others after host admits)
         socketRef.current.on('join-approved', () => {
           setRoomStatus('approved');
         });
 
-        // Waiting for host to admit
         socketRef.current.on('waiting-for-approval', () => {
           setRoomStatus('waiting');
         });
 
-        // Host denied entry
         socketRef.current.on('join-denied', () => {
           setRoomStatus('denied');
         });
 
-        // Become host (e.g. original host left) — future use
         socketRef.current.on('you-are-host', () => {
           console.log('You are now the host');
         });
 
-        // Someone is knocking — show admit/deny popup to host
         socketRef.current.on('admission-request', ({ socketId, userName }) => {
           setAdmissionRequests(prev => [...prev, { socketId, userName }]);
         });
 
-        // New joiner receives list of existing users and initiates peer connections to each
+        // ✅ FIX: New joiner gets existing users and creates peers for each
         socketRef.current.on('existing-users', users => {
+          // Clear any stale peers first
+          peersRef.current.forEach(({ peer }) => {
+            if (!peer.destroyed) peer.destroy();
+          });
+          peersRef.current = [];
+
           const newPeers = [];
           users.forEach(existingUser => {
             if (existingUser.socketId === socketRef.current.id) return;
+            // ✅ Guard: don't create duplicate
+            if (peersRef.current.find(p => p.peerID === existingUser.socketId)) return;
 
             const peer = createPeer(existingUser.socketId, socketRef.current.id, stream);
-            peersRef.current.push({
+            const peerObj = {
               peerID: existingUser.socketId,
               peer,
               userName: existingUser.userName
-            });
-            newPeers.push({
-              peerID: existingUser.socketId,
-              peer,
-              userName: existingUser.userName
-            });
+            };
+            peersRef.current.push(peerObj);
+            newPeers.push(peerObj);
           });
           setPeers(newPeers);
         });
 
-        // Existing peer receives signal from new joiner and responds
-        // ✅ Fixed: userName is now the caller's name (who is joining)
-        // ✅ Fixed: duplicate peer guard added
+        // ✅ FIX: Existing user receives signal from new joiner
         socketRef.current.on('user-connected', ({ signal, socketId, userName }) => {
-          const alreadyExists = peersRef.current.find(p => p.peerID === socketId);
-          if (alreadyExists) return;
+          // ✅ Guard: ignore if peer already exists
+          if (peersRef.current.find(p => p.peerID === socketId)) return;
 
           const peer = addPeer(signal, socketId, stream);
-          peersRef.current.push({ peerID: socketId, peer, userName });
-          setPeers(users => [...users, { peerID: socketId, peer, userName }]);
+          const peerObj = { peerID: socketId, peer, userName };
+          peersRef.current.push(peerObj);
+          // ✅ FIX: Use functional update to avoid stale state overwrite
+          setPeers(prev => {
+            if (prev.find(p => p.peerID === socketId)) return prev;
+            return [...prev, peerObj];
+          });
         });
 
-        // New joiner receives responses from existing peers to complete handshake
         socketRef.current.on('receiving-returned-signal', payload => {
           const item = peersRef.current.find(p => p.peerID === payload.id);
           if (item && item.peer && !item.peer.destroyed) {
@@ -142,7 +142,6 @@ function VideoRoom({ user }) {
 
         socketRef.current.on('user-disconnected', ({ socketId }) => {
           const peerObj = peersRef.current.find(p => p.peerID === socketId);
-          // ✅ Only destroy if not already destroyed to avoid abort errors
           if (peerObj && !peerObj.peer.destroyed) {
             peerObj.peer.destroy();
           }
@@ -154,7 +153,6 @@ function VideoRoom({ user }) {
           setMessages(history);
         });
 
-        // ✅ Fixed: only fires for OTHER participants (server uses socket.to)
         socketRef.current.on('new-message', message => {
           setMessages(prev => [...prev, message]);
           setUnreadCount(prev => prev + 1);
@@ -175,12 +173,10 @@ function VideoRoom({ user }) {
     };
   }, [roomId, user]);
 
-  // Clear unread count when chat is opened
   useEffect(() => {
     if (chatOpen) setUnreadCount(0);
   }, [chatOpen]);
 
-  // ✅ Attach local stream to video element once approved and DOM is ready
   useEffect(() => {
     if (roomStatus === 'approved' && userVideo.current && userStreamRef.current) {
       userVideo.current.srcObject = userStreamRef.current;
@@ -205,9 +201,8 @@ function VideoRoom({ user }) {
       socketRef.current.emit('sending-signal', { userToSignal, callerID, signal });
     });
 
-    // ✅ Suppress "User-Initiated Abort / Close called" errors on disconnect
     peer.on('error', err => {
-      console.warn('Peer connection error (createPeer):', err.message);
+      console.warn('Peer error (createPeer):', err.message);
     });
 
     return peer;
@@ -231,9 +226,8 @@ function VideoRoom({ user }) {
       socketRef.current.emit('returning-signal', { signal, callerID });
     });
 
-    // ✅ Suppress "User-Initiated Abort / Close called" errors on disconnect
     peer.on('error', err => {
-      console.warn('Peer connection error (addPeer):', err.message);
+      console.warn('Peer error (addPeer):', err.message);
     });
 
     peer.signal(incomingSignal);
@@ -253,7 +247,6 @@ function VideoRoom({ user }) {
       const videoTrack = userStreamRef.current.getVideoTracks()[0];
       videoTrack.enabled = !videoTrack.enabled;
       setVideoEnabled(videoTrack.enabled);
-      // ✅ Re-attach stream so video element reflects mute state correctly
       if (userVideo.current) {
         userVideo.current.srcObject = userStreamRef.current;
       }
@@ -297,7 +290,6 @@ function VideoRoom({ user }) {
         if (sender) sender.replaceTrack(originalTrack);
       });
 
-      // ✅ Reattach original stream to local video element
       if (userVideo.current) {
         userVideo.current.srcObject = userStreamRef.current;
       }
@@ -319,10 +311,7 @@ function VideoRoom({ user }) {
         message: newMessage,
         timestamp: new Date().toISOString()
       };
-
-      // ✅ Fixed: add locally for sender; server broadcasts to others only
       setMessages(prev => [...prev, msg]);
-
       socketRef.current.emit('send-message', {
         roomId,
         message: newMessage,
@@ -348,9 +337,7 @@ function VideoRoom({ user }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getMeetingLink = () => {
-    return `${window.location.origin}/room/${roomId}`;
-  };
+  const getMeetingLink = () => `${window.location.origin}/room/${roomId}`;
 
   const copyMeetingLink = () => {
     navigator.clipboard.writeText(getMeetingLink());
@@ -360,7 +347,6 @@ function VideoRoom({ user }) {
 
   const shareMeetingLink = async () => {
     const link = getMeetingLink();
-    // Use native share sheet on mobile if available
     if (navigator.share) {
       try {
         await navigator.share({
@@ -369,7 +355,6 @@ function VideoRoom({ user }) {
           url: link,
         });
       } catch (err) {
-        // User cancelled share or not supported — fall back to copy
         copyMeetingLink();
       }
     } else {
@@ -377,7 +362,6 @@ function VideoRoom({ user }) {
     }
   };
 
-  // Waiting screen
   if (roomStatus === 'waiting') {
     return (
       <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: '#121212', gap: 3 }}>
@@ -387,7 +371,7 @@ function VideoRoom({ user }) {
         <Typography variant="h5" color="white">Waiting to be admitted</Typography>
         <Typography variant="body2" color="grey.500">The host will let you in soon</Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main', animation: 'pulse 1.5s infinite' }} />
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }} />
           <Typography variant="caption" color="grey.500">Room: {roomId}</Typography>
         </Box>
         <Button variant="outlined" color="error" onClick={() => navigate('/dashboard')} sx={{ mt: 2 }}>
@@ -397,7 +381,6 @@ function VideoRoom({ user }) {
     );
   }
 
-  // Denied screen
   if (roomStatus === 'denied') {
     return (
       <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: '#121212', gap: 3 }}>
@@ -420,8 +403,6 @@ function VideoRoom({ user }) {
           <Typography variant="h6" sx={{ flexGrow: 1, color: 'white', fontSize: { xs: 14, sm: 20 } }}>
             Room: {roomId}
           </Typography>
-
-          {/* Copy room code */}
           <Button
             variant="outlined"
             size="small"
@@ -431,8 +412,6 @@ function VideoRoom({ user }) {
           >
             {copied ? 'Copied!' : 'Code'}
           </Button>
-
-          {/* Share meeting link */}
           <Button
             variant="contained"
             size="small"
@@ -443,11 +422,9 @@ function VideoRoom({ user }) {
           >
             {linkCopied ? 'Link Copied!' : 'Share Link'}
           </Button>
-
           <Chip label={`${peers.length + 1} participant${peers.length !== 0 ? 's' : ''}`} color="primary" size="small" />
         </Toolbar>
 
-        {/* Meeting link banner — shown on create so host can easily copy/share */}
         {peers.length === 0 && (
           <Box sx={{
             px: 2, py: 1,
@@ -471,13 +448,8 @@ function VideoRoom({ user }) {
         )}
       </AppBar>
 
-      {/* Dynamic video grid — adapts to number of participants */}
       <Box sx={{ flex: 1, overflow: 'hidden', p: 1 }}>
-        <VideoGrid
-          userVideo={userVideo}
-          userName={user.name}
-          peers={peers}
-        />
+        <VideoGrid userVideo={userVideo} userName={user.name} peers={peers} />
       </Box>
 
       <Paper sx={{ p: 2, display: 'flex', justifyContent: 'center', gap: 2, bgcolor: '#1e1e1e' }}>
@@ -488,7 +460,6 @@ function VideoRoom({ user }) {
         >
           {audioEnabled ? <MicIcon /> : <MicOffIcon />}
         </IconButton>
-
         <IconButton
           onClick={toggleVideo}
           sx={{ bgcolor: videoEnabled ? 'primary.main' : 'error.main', color: 'white',
@@ -496,7 +467,6 @@ function VideoRoom({ user }) {
         >
           {videoEnabled ? <VideocamIcon /> : <VideocamOffIcon />}
         </IconButton>
-
         <IconButton
           onClick={toggleScreenShare}
           sx={{ bgcolor: screenSharing ? 'success.main' : 'primary.main', color: 'white',
@@ -504,8 +474,6 @@ function VideoRoom({ user }) {
         >
           {screenSharing ? <StopScreenShareIcon /> : <ScreenShareIcon />}
         </IconButton>
-
-        {/* ✅ Unread message badge on chat button */}
         <Box sx={{ position: 'relative' }}>
           <IconButton
             onClick={() => setChatOpen(!chatOpen)}
@@ -525,7 +493,6 @@ function VideoRoom({ user }) {
             </Box>
           )}
         </Box>
-
         <IconButton
           onClick={leaveRoom}
           sx={{ bgcolor: 'error.main', color: 'white', '&:hover': { bgcolor: 'error.dark' } }}
@@ -546,7 +513,6 @@ function VideoRoom({ user }) {
             <CloseIcon />
           </IconButton>
         </Box>
-
         <List sx={{ flex: 1, overflow: 'auto', px: 2 }}>
           {messages.map((msg, idx) => (
             <ListItem key={idx} sx={{ flexDirection: 'column', alignItems: 'flex-start', mb: 1 }}>
@@ -557,7 +523,6 @@ function VideoRoom({ user }) {
             </ListItem>
           ))}
         </List>
-
         <Box sx={{ p: 2, display: 'flex', gap: 1 }}>
           <TextField
             fullWidth
@@ -570,7 +535,7 @@ function VideoRoom({ user }) {
           <Button variant="contained" onClick={sendMessage}>Send</Button>
         </Box>
       </Drawer>
-      {/* Admission request popups — shown to host */}
+
       {admissionRequests.map((req) => (
         <Dialog key={req.socketId} open={true} maxWidth="xs" fullWidth>
           <DialogTitle sx={{ pb: 1 }}>Someone wants to join</DialogTitle>
@@ -583,20 +548,8 @@ function VideoRoom({ user }) {
             </Box>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button
-              variant="outlined"
-              color="error"
-              onClick={() => denyUser(req.socketId)}
-            >
-              Deny
-            </Button>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => admitUser(req.socketId)}
-            >
-              Admit
-            </Button>
+            <Button variant="outlined" color="error" onClick={() => denyUser(req.socketId)}>Deny</Button>
+            <Button variant="contained" color="primary" onClick={() => admitUser(req.socketId)}>Admit</Button>
           </DialogActions>
         </Dialog>
       ))}
@@ -604,7 +557,6 @@ function VideoRoom({ user }) {
   );
 }
 
-// Single video tile — used for remote peers
 function Video({ peer, userName }) {
   const ref = useRef();
   const [hasStream, setHasStream] = useState(false);
@@ -617,13 +569,11 @@ function Video({ peer, userName }) {
       }
     };
 
-    // ✅ Check if stream already exists (timing: stream may fire before mount)
     if (peer.streams && peer.streams[0]) {
       attachStream(peer.streams[0]);
     }
 
     peer.on('stream', attachStream);
-
     return () => {
       peer.off('stream', attachStream);
     };
@@ -637,16 +587,13 @@ function Video({ peer, userName }) {
         playsInline
         style={{ width: '100%', height: '100%', objectFit: 'cover', display: hasStream ? 'block' : 'none' }}
       />
-      {/* Placeholder when stream hasn't arrived yet */}
       {!hasStream && (
         <Box sx={{
           width: '100%', height: '100%',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           bgcolor: '#2e2e2e'
         }}>
-          <Typography sx={{ color: 'grey.500', fontSize: 14 }}>
-            Connecting...
-          </Typography>
+          <Typography sx={{ color: 'grey.500', fontSize: 14 }}>Connecting...</Typography>
         </Box>
       )}
       <Typography sx={{
@@ -660,13 +607,9 @@ function Video({ peer, userName }) {
   );
 }
 
-// Computes grid layout based on total participant count
 function VideoGrid({ userVideo, userName, peers }) {
-  const total = peers.length + 1; // include self
-
-  // Determine columns: 1→1col, 2→2col, 3-4→2col, 5-6→3col
+  const total = peers.length + 1;
   const cols = total === 1 ? 1 : total <= 4 ? 2 : 3;
-  // Rows needed
   const rows = Math.ceil(total / cols);
 
   const tileStyle = {
@@ -674,7 +617,6 @@ function VideoGrid({ userVideo, userName, peers }) {
     bgcolor: '#1e1e1e',
     borderRadius: 1,
     overflow: 'hidden',
-    // Each tile takes equal share of grid
     gridColumn: 'span 1',
   };
 
@@ -687,7 +629,6 @@ function VideoGrid({ userVideo, userName, peers }) {
       width: '100%',
       height: '100%',
     }}>
-      {/* Own video tile */}
       <Box sx={tileStyle}>
         <video
           ref={userVideo}
@@ -705,7 +646,6 @@ function VideoGrid({ userVideo, userName, peers }) {
         </Typography>
       </Box>
 
-      {/* Remote peer tiles */}
       {peers.map((peer) => (
         <Box key={peer.peerID} sx={tileStyle}>
           <Video peer={peer.peer} userName={peer.userName} />
