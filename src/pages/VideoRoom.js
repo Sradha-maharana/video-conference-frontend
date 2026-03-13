@@ -19,8 +19,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Avatar,
-  Badge
+  Avatar
 } from '@mui/material';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
@@ -50,10 +49,8 @@ function VideoRoom({ user }) {
   const [newMessage, setNewMessage] = useState('');
   const [copied, setCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [showShareDialog, setShowShareDialog] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [roomStatus, setRoomStatus] = useState('connecting'); // connecting | waiting | approved | denied
-  const [isHost, setIsHost] = useState(false);
   const [admissionRequests, setAdmissionRequests] = useState([]); // [{ socketId, userName }]
 
   const socketRef = useRef();
@@ -92,9 +89,9 @@ function VideoRoom({ user }) {
           setRoomStatus('denied');
         });
 
-        // Become host (e.g. original host left)
+        // Become host (e.g. original host left) — future use
         socketRef.current.on('you-are-host', () => {
-          setIsHost(true);
+          console.log('You are now the host');
         });
 
         // Someone is knocking — show admit/deny popup to host
