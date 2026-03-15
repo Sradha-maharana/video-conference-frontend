@@ -205,6 +205,11 @@ function VideoRoom({ user }) {
       console.warn('Peer error (createPeer):', err.message);
     });
 
+    // Capture remote stream instantly to prevent race conditions
+    peer.on('stream', remoteStream => {
+      peer.remoteStream = remoteStream;
+    });
+
     return peer;
   }
 
@@ -228,6 +233,11 @@ function VideoRoom({ user }) {
 
     peer.on('error', err => {
       console.warn('Peer error (addPeer):', err.message);
+    });
+
+    // Capture remote stream instantly to prevent race conditions
+    peer.on('stream', remoteStream => {
+      peer.remoteStream = remoteStream;
     });
 
     peer.signal(incomingSignal);
@@ -569,8 +579,12 @@ function Video({ peer, userName }) {
       }
     };
 
-    if (peer.streams && peer.streams[0]) {
-      attachStream(peer.streams[0]);
+    // Use our instantly captured remote stream to guarantee we never accidentally bind the local stream
+    if (peer.remoteStream) {
+      attachStream(peer.remoteStream);
+    } else if (peer._remoteStreams && peer._remoteStreams[0]) {
+      // Fallback for simple-peer internal remote streams array
+      attachStream(peer._remoteStreams[0]);
     }
 
     peer.on('stream', attachStream);
