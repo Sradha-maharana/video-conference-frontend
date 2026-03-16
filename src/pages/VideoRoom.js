@@ -181,7 +181,7 @@ function VideoRoom({ user }) {
         socketRef.current.disconnect();
       }
     };
-  }, [roomId, user]);
+  }, [roomId, user, navigate]);
 
   useEffect(() => {
     if (chatOpen) setUnreadCount(0);
