@@ -33,7 +33,7 @@ function Login({ onLogin }) {
         password
       });
 
-      onLogin(response.data.user, response.data.token);
+      onLogin(response.data.user, response.data.token, response.data.securityAlert);
       // ✅ If user came from a room link, redirect back there after login
       const redirectTo = sessionStorage.getItem('redirectAfterLogin');
       if (redirectTo) {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container,
   Paper,
@@ -16,7 +16,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  InputAdornment
+  InputAdornment,
+  Alert
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -29,13 +30,29 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 
 import { API_URL } from '../config';
 
-function Dashboard({ user, onLogout }) {
+function Dashboard({ user, onLogout, securityAlert, setSecurityAlert }) {
   const [roomId, setRoomId] = useState('');
   const [creating, setCreating] = useState(false);
   const [shareDialog, setShareDialog] = useState(false);
   const [createdRoomId, setCreatedRoomId] = useState('');
   const [copied, setCopied] = useState(false);
+  const [pastMeetings, setPastMeetings] = useState([]);
+  const [summaryDialog, setSummaryDialog] = useState(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/rooms-history`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        setPastMeetings(response.data);
+      } catch (error) {
+        console.error("Error fetching past meetings:", error);
+      }
+    };
+    fetchHistory();
+  }, []);
 
   const handleCreateRoom = async () => {
     setCreating(true);
@@ -109,6 +126,21 @@ function Dashboard({ user, onLogout }) {
       </AppBar>
 
       <Container maxWidth="md" sx={{ mt: 8 }}>
+        {securityAlert && (
+          <Alert 
+            severity="warning" 
+            onClose={() => setSecurityAlert(null)}
+            sx={{ mb: 4, borderRadius: 2 }}
+          >
+            <strong>Security Alert (AI Detected):</strong> {securityAlert.message} 
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Anomaly Score: {securityAlert.riskScore.toFixed(2)}/1.0
+              </Typography>
+            </Box>
+          </Alert>
+        )}
+
         <Paper elevation={3} sx={{ p: 4, borderRadius: 2 }}>
           <Typography variant="h4" gutterBottom textAlign="center">
             Welcome, {user.name}!
@@ -178,6 +210,43 @@ function Dashboard({ user, onLogout }) {
           </Grid>
         </Paper>
 
+        {pastMeetings.length > 0 && (
+          <Paper elevation={3} sx={{ p: 4, borderRadius: 2, mt: 4 }}>
+            <Typography variant="h5" gutterBottom>
+              Past Meetings
+            </Typography>
+            <Grid container spacing={2}>
+              {pastMeetings.map((meeting) => (
+                <Grid item xs={12} sm={6} md={4} key={meeting._id}>
+                  <Card variant="outlined" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <CardContent sx={{ flexGrow: 1 }}>
+                      <Typography variant="h6" gutterBottom>
+                        Room: {meeting.roomId}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Date: {new Date(meeting.createdAt).toLocaleDateString()}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        Participants: {meeting.participants.length}
+                      </Typography>
+                    </CardContent>
+                    <Box sx={{ p: 2, pt: 0 }}>
+                      <Button 
+                        variant="outlined" 
+                        size="small" 
+                        fullWidth
+                        onClick={() => setSummaryDialog(meeting)}
+                      >
+                        View AI Summary
+                      </Button>
+                    </Box>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
+        )}
+
         <Box sx={{ mt: 4, textAlign: 'center' }}>
           <Typography variant="body2" color="text.secondary">
             🔒 Secure end-to-end encrypted video calls
@@ -236,6 +305,21 @@ function Dashboard({ user, onLogout }) {
           </Button>
         </DialogActions>
       </Dialog>
+      
+      {/* Summary Dialog */}
+      {summaryDialog && (
+        <Dialog open={true} onClose={() => setSummaryDialog(null)} maxWidth="md" fullWidth>
+          <DialogTitle>AI Summary - Room {summaryDialog.roomId}</DialogTitle>
+          <DialogContent dividers>
+            <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+              {summaryDialog.summary || "No summary available."}
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setSummaryDialog(null)}>Close</Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </Box>
   );
 }

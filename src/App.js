@@ -49,16 +49,22 @@ function App() {
     return () => axios.interceptors.response.eject(interceptor);
   }, []);
 
-  const handleLogin = (userData, token) => {
+  const [securityAlert, setSecurityAlert] = useState(null);
+
+  const handleLogin = (userData, token, alertData) => {
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
+    if (alertData) {
+      setSecurityAlert(alertData);
+    }
   };
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setUser(null);
+    setSecurityAlert(null);
   };
 
   return (
@@ -76,7 +82,7 @@ function App() {
           />
           <Route
             path="/dashboard"
-            element={user ? <Dashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" />}
+            element={user ? <Dashboard user={user} onLogout={handleLogout} securityAlert={securityAlert} setSecurityAlert={setSecurityAlert} /> : <Navigate to="/login" />}
           />
           <Route
             path="/room/:roomId"

@@ -52,8 +52,10 @@ function VideoRoom({ user }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [roomStatus, setRoomStatus] = useState('connecting');
   const [admissionRequests, setAdmissionRequests] = useState([]);
+  const [isHost, setIsHost] = useState(false);
 
   const socketRef = useRef();
+  const recognitionRef = useRef(null);
   const userVideo = useRef();
   const peersRef = useRef([]);
   const screenStreamRef = useRef();
@@ -85,7 +87,15 @@ function VideoRoom({ user }) {
         });
 
         socketRef.current.on('you-are-host', () => {
-          console.log('You are now the host');
+          setIsHost(true);
+        });
+
+        socketRef.current.on('meeting-ended', ({ summary }) => {
+          if (recognitionRef.current) {
+            recognitionRef.current.stop();
+          }
+          alert(`Meeting ended by host.\n\nSummary:\n${summary}`);
+          navigate('/dashboard');
         });
 
         socketRef.current.on('admission-request', ({ socketId, userName }) => {
@@ -176,6 +186,49 @@ function VideoRoom({ user }) {
   useEffect(() => {
     if (chatOpen) setUnreadCount(0);
   }, [chatOpen]);
+
+  useEffect(() => {
+    if (roomStatus === 'approved') {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition && !recognitionRef.current) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event) => {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              const transcriptText = event.results[i][0].transcript;
+              if (socketRef.current && transcriptText.trim()) {
+                socketRef.current.emit('send-transcript', {
+                  roomId,
+                  userName: user.name,
+                  text: transcriptText.trim()
+                });
+              }
+            }
+          }
+        };
+
+        recognition.onend = () => {
+          if (recognitionRef.current) {
+            try { recognition.start(); } catch(e) {}
+          }
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
+      }
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+    };
+  }, [roomStatus, roomId, user.name]);
 
   useEffect(() => {
     if (roomStatus === 'approved' && userVideo.current && userStreamRef.current) {
@@ -312,6 +365,12 @@ function VideoRoom({ user }) {
       userStreamRef.current.getTracks().forEach(track => track.stop());
     }
     navigate('/dashboard');
+  };
+
+  const endMeeting = () => {
+    if (window.confirm("Are you sure you want to end the meeting for everyone? This will generate a summary and close the room.")) {
+      socketRef.current.emit('end-meeting', { roomId });
+    }
   };
 
   const sendMessage = () => {
@@ -505,10 +564,21 @@ function VideoRoom({ user }) {
         </Box>
         <IconButton
           onClick={leaveRoom}
+          title="Leave Room"
           sx={{ bgcolor: 'error.main', color: 'white', '&:hover': { bgcolor: 'error.dark' } }}
         >
           <CallEndIcon />
         </IconButton>
+        {isHost && (
+          <Button 
+            variant="contained" 
+            color="error" 
+            onClick={endMeeting}
+            sx={{ fontWeight: 'bold' }}
+          >
+            End Meeting
+          </Button>
+        )}
       </Paper>
 
       <Drawer
