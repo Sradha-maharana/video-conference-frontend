@@ -187,16 +187,27 @@ function VideoRoom({ user }) {
     if (chatOpen) setUnreadCount(0);
   }, [chatOpen]);
 
+  const audioEnabledRef = useRef(audioEnabled);
   useEffect(() => {
+    audioEnabledRef.current = audioEnabled;
+  }, [audioEnabled]);
+
+  useEffect(() => {
+    let recognition = null;
+    let isComponentMounted = true;
+
     if (roomStatus === 'approved') {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition && !recognitionRef.current) {
-        const recognition = new SpeechRecognition();
+        recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = false;
         recognition.lang = 'en-US';
 
         recognition.onresult = (event) => {
+          // Only process and send if user is not muted
+          if (!audioEnabledRef.current) return;
+
           for (let i = event.resultIndex; i < event.results.length; i++) {
             if (event.results[i].isFinal) {
               const transcriptText = event.results[i][0].transcript;
@@ -211,20 +222,31 @@ function VideoRoom({ user }) {
           }
         };
 
+        recognition.onerror = (event) => {
+          console.warn('Speech recognition error:', event.error);
+        };
+
         recognition.onend = () => {
-          if (recognitionRef.current) {
-            try { recognition.start(); } catch(e) {}
+          // Restart recognition if the component is still mounted
+          // Added a small timeout to avoid Chrome DOMException issues
+          if (isComponentMounted && recognitionRef.current) {
+            setTimeout(() => {
+              if (isComponentMounted && recognitionRef.current) {
+                try { recognition.start(); } catch (e) {}
+              }
+            }, 250);
           }
         };
 
         recognitionRef.current = recognition;
-        recognition.start();
+        try { recognition.start(); } catch (e) {}
       }
     }
 
     return () => {
+      isComponentMounted = false;
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try { recognitionRef.current.stop(); } catch (e) {}
         recognitionRef.current = null;
       }
     };
