@@ -53,16 +53,21 @@ function VideoRoom({ user }) {
   const [roomStatus, setRoomStatus] = useState('connecting');
   const [admissionRequests, setAdmissionRequests] = useState([]);
   const [isHost, setIsHost] = useState(false);
+  const [captions, setCaptions] = useState([]);
 
   const socketRef = useRef();
   const recognitionRef = useRef(null);
+  const captionsTimeoutRef = useRef(null);
   const userVideo = useRef();
   const peersRef = useRef([]);
   const screenStreamRef = useRef();
   const userStreamRef = useRef();
 
   useEffect(() => {
-    socketRef.current = io(SOCKET_URL);
+    const token = localStorage.getItem('token');
+    socketRef.current = io(SOCKET_URL, {
+      auth: { token }
+    });
 
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
@@ -167,6 +172,14 @@ function VideoRoom({ user }) {
           setMessages(prev => [...prev, message]);
           setUnreadCount(prev => prev + 1);
         });
+
+        socketRef.current.on('new-transcript', entry => {
+          setCaptions(prev => [...prev.slice(-2), entry]);
+          if (captionsTimeoutRef.current) clearTimeout(captionsTimeoutRef.current);
+          captionsTimeoutRef.current = setTimeout(() => {
+            setCaptions([]);
+          }, 8000);
+        });
       })
       .catch(err => {
         console.error('Error accessing media devices:', err);
@@ -174,6 +187,7 @@ function VideoRoom({ user }) {
       });
 
     return () => {
+      if (captionsTimeoutRef.current) clearTimeout(captionsTimeoutRef.current);
       if (userStreamRef.current) {
         userStreamRef.current.getTracks().forEach(track => track.stop());
       }
@@ -195,6 +209,52 @@ function VideoRoom({ user }) {
   useEffect(() => {
     let recognition = null;
     let isComponentMounted = true;
+    let hasFatalError = false;
+    let fallbackRecorder = null;
+    let fallbackInterval = null;
+
+    const startFallbackTranscription = () => {
+      if (!userStreamRef.current || !isComponentMounted) return;
+      try {
+        const stream = userStreamRef.current;
+        let options = { mimeType: 'audio/webm' };
+        if (!MediaRecorder.isTypeSupported('audio/webm')) {
+            options = { mimeType: 'audio/mp4' }; 
+        }
+        
+        fallbackRecorder = new MediaRecorder(stream, options);
+        fallbackRecorder.ondataavailable = (e) => {
+            console.log("[FallbackTranscription] Chunk generated. Size:", e.data.size, "Bytes. AudioEnabled:", audioEnabledRef.current);
+            if (e.data.size > 0 && socketRef.current && audioEnabledRef.current) {
+                const reader = new FileReader();
+                reader.readAsDataURL(e.data);
+                reader.onloadend = () => {
+                    const base64data = reader.result.split(',')[1];
+                    console.log("[FallbackTranscription] Emitting base64 chunk to server...");
+                    socketRef.current.emit('send-audio-chunk', {
+                        roomId,
+                        userName: user.name,
+                        audioData: base64data,
+                        mimeType: fallbackRecorder.mimeType || options.mimeType
+                    });
+                };
+            }
+        };
+        
+        fallbackRecorder.start();
+        
+        fallbackInterval = setTimeout(() => {
+            if (fallbackRecorder && fallbackRecorder.state === 'recording') {
+                fallbackRecorder.stop();
+            }
+            if (isComponentMounted) {
+                startFallbackTranscription();
+            }
+        }, 8000);
+      } catch (e) {
+        console.warn("Fallback transcription failed to start:", e);
+      }
+    };
 
     if (roomStatus === 'approved') {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -205,12 +265,12 @@ function VideoRoom({ user }) {
         recognition.lang = 'en-US';
 
         recognition.onresult = (event) => {
-          // Only process and send if user is not muted
           if (!audioEnabledRef.current) return;
 
           for (let i = event.resultIndex; i < event.results.length; i++) {
             if (event.results[i].isFinal) {
               const transcriptText = event.results[i][0].transcript;
+              console.log("[SpeechRecognition] Captured final text:", transcriptText);
               if (socketRef.current && transcriptText.trim()) {
                 socketRef.current.emit('send-transcript', {
                   roomId,
@@ -218,20 +278,27 @@ function VideoRoom({ user }) {
                   text: transcriptText.trim()
                 });
               }
+            } else {
+              console.log("[SpeechRecognition] Interim text:", event.results[i][0].transcript);
             }
           }
         };
 
         recognition.onerror = (event) => {
-          console.warn('Speech recognition error:', event.error);
+          console.warn('[SpeechRecognition] Error encountered:', event.error);
+          if (event.error === 'not-allowed' || event.error === 'audio-capture' || event.error === 'aborted') {
+            if (!hasFatalError) {
+              hasFatalError = true;
+              console.log("[SpeechRecognition] Switching to fallback AI audio transcription...");
+              startFallbackTranscription();
+            }
+          }
         };
 
         recognition.onend = () => {
-          // Restart recognition if the component is still mounted
-          // Added a small timeout to avoid Chrome DOMException issues
-          if (isComponentMounted && recognitionRef.current) {
+          if (isComponentMounted && recognitionRef.current && !hasFatalError) {
             setTimeout(() => {
-              if (isComponentMounted && recognitionRef.current) {
+              if (isComponentMounted && recognitionRef.current && !hasFatalError) {
                 try { recognition.start(); } catch (e) {}
               }
             }, 250);
@@ -239,7 +306,12 @@ function VideoRoom({ user }) {
         };
 
         recognitionRef.current = recognition;
-        try { recognition.start(); } catch (e) {}
+        console.log("[SpeechRecognition] Successfully started native browser transcription");
+        try { recognition.start(); } catch (e) {
+          console.error("[SpeechRecognition] Failed to start:", e);
+        }
+      } else if (!SpeechRecognition) {
+        startFallbackTranscription();
       }
     }
 
@@ -248,6 +320,12 @@ function VideoRoom({ user }) {
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch (e) {}
         recognitionRef.current = null;
+      }
+      if (fallbackRecorder && fallbackRecorder.state === 'recording') {
+        fallbackRecorder.stop();
+      }
+      if (fallbackInterval) {
+        clearTimeout(fallbackInterval);
       }
     };
   }, [roomStatus, roomId, user.name]);
@@ -539,8 +617,26 @@ function VideoRoom({ user }) {
         )}
       </AppBar>
 
-      <Box sx={{ flex: 1, overflow: 'hidden', p: 1 }}>
+      <Box sx={{ flex: 1, overflow: 'hidden', p: 1, position: 'relative' }}>
         <VideoGrid userVideo={userVideo} userName={user.name} peers={peers} />
+        
+        {captions.length > 0 && (
+          <Box sx={{
+            position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'center',
+            width: '80%', maxWidth: 800, zIndex: 10, pointerEvents: 'none'
+          }}>
+            {captions.map((cap, i) => (
+              <Typography key={i} sx={{
+                bgcolor: 'rgba(0,0,0,0.75)', color: 'white', px: 2, py: 1, borderRadius: 2,
+                fontSize: { xs: 14, md: 16 }, textAlign: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                animation: 'fadeIn 0.3s ease-in-out'
+              }}>
+                <strong style={{ color: '#90caf9' }}>{cap.userName}:</strong> {cap.text}
+              </Typography>
+            ))}
+          </Box>
+        )}
       </Box>
 
       <Paper sx={{ p: 2, display: 'flex', justifyContent: 'center', gap: 2, bgcolor: '#1e1e1e' }}>
